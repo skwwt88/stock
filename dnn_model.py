@@ -18,9 +18,9 @@ from pytorch_tools import set_seed, save_model, clean_models, find_best_model_fi
 
 _device = "cuda:0"
 _lr = 0.001
-_min_lr = 0.000001
-_max_epoch = 8000
-_batch_size = 4096
+_min_lr = 0.0000001
+_max_epoch = 80000
+_batch_size = 8192
 _model_name = 'dnn_model'
 _models_folder = 'models'
 _train_stockids = [
@@ -58,13 +58,14 @@ _input_feature_cols = ['p_open_s', 'p_close_s', 'p_high_s', 'p_low_s', 'p_volume
 _output_feature_cols = ['n_high_s', 'n_low_s']
 _output_size = len(_output_feature_cols)
 _input_size = len(_input_feature_cols)
-_encoder_hidden_size = 32
-_decoder_hidden_size = 64
+_encoder_hidden_size = 64
+_decoder_hidden_size = 32
 _encoder_layers = 3
-_decoder_layers = 2
-_p_steps = 22
+_decoder_layers = 3
+_p_steps = 44
 _n_steps = 2
-_lr_patience = 100
+_lr_patience = 50
+_stop_patience = 800
 
 # Dataset
 class StockDataset(Dataset):
@@ -110,11 +111,11 @@ class TimeSeriesModel_NStep(nn.Module):
         
         self.fc_base_status = nn.Linear(input_size, encoder_hidden_size)
         self.encoder = nn.GRU(input_size=input_size, hidden_size=encoder_hidden_size,
-                            num_layers=encoder_layers, batch_first=True)
+                            num_layers=encoder_layers, batch_first=True, dropout=0.2)
         self.fc_encoder = nn.Linear(encoder_hidden_size * encoder_layers, decoder_hidden_size)         
         
         self.decoder = nn.GRU(input_size=decoder_hidden_size, hidden_size=decoder_hidden_size,
-                            num_layers=decoder_layers, batch_first=True)
+                            num_layers=decoder_layers, batch_first=True, dropout=0.2)
         
         self.fc = nn.Linear(decoder_hidden_size, output_size)
 
@@ -126,13 +127,17 @@ class TimeSeriesModel_NStep(nn.Module):
 
         _, encoder_hidden = self.encoder(x, base_status) 
         encoder_hidder = encoder_hidden.transpose(0, 1).reshape((-1, self.encoder_hidden_size * self.encoder_layers))
-        encode_status = self.fc_encoder(self.dropout(encoder_hidder))
+        encode_status = self.fc_encoder(encoder_hidder)
+        #encode_status = F.relu(encode_status)
+
         decoder_input = encode_status.repeat((1, 1, self.n_steps))
         decoder_input = decoder_input.view(-1, self.n_steps, self.decoder_hidden_size)
         decoder_status = encode_status.repeat((self.decoder_layers, 1)).reshape((self.decoder_layers, -1, self.decoder_hidden_size))
 
         decoder_out, _ = self.decoder(decoder_input, decoder_status) 
         decoder_out = decoder_out.reshape(-1, self.decoder_hidden_size)
+        #decoder_out = F.relu(decoder_out)
+
         out = self.fc(self.dropout(decoder_out))
         out = out.reshape(-1, self.output_size * self.n_steps)
         
@@ -146,7 +151,7 @@ def train(model, stock_ids):
     optimizer = torch.optim.Adam(model.parameters(), lr=_lr)
     criterion = torch.nn.MSELoss()
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=_lr_patience, verbose=True, cooldown=1, min_lr=_min_lr, eps=_min_lr)
-    earlyStop = EarlyStopping(_model_name, _models_folder, patience=10)
+    earlyStop = EarlyStopping(_model_name, _models_folder, patience=_stop_patience)
     clean_models(_model_name, _models_folder)
 
     data = load_data(stock_ids, _p_steps)
@@ -187,10 +192,9 @@ def train(model, stock_ids):
                 total_valid_loss.append(validate_loss)
         validate_loss = torch.mean(torch.stack(total_valid_loss))
 
-        if epoch % 100 == 99:
-            earlyStop(validate_loss, model)
-            if earlyStop.early_stop:
-                break
+        earlyStop(validate_loss, model)
+        if earlyStop.early_stop:
+            break
 
         scheduler.step(train_loss)
         pbar.set_description("{0:.6f}, {1:.6f}".format(train_loss, validate_loss))
