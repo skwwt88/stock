@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import os
 import glob 
+import json
 
 def set_seed(seed):
      torch.manual_seed(seed)
@@ -33,6 +34,14 @@ def save_model(model, name, index, model_folder, score):
 
      name = model_name(name, index, score)
      torch.save(model.state_dict(), os.path.join(model_folder, name))
+
+def dump_data_info(model_name, model_folder, info):
+    with open(os.path.join(model_folder,'{0}.json'.format(model_name)),'w') as dumped_file :
+          json.dump(info, dumped_file)
+
+def load_data_info(model_name, model_folder):
+    with open(os.path.join(model_folder,'{0}.json'.format(model_name))) as json_file :
+         return json.load(json_file)
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""

@@ -11,9 +11,11 @@ import torch.nn.functional as F
 import torch
 
 from tqdm import tqdm
+import argparse
 
-from feature_engineering import load_data
-from pytorch_tools import set_seed, save_model, clean_models, find_best_model_file, EarlyStopping
+from feature_engineering import load_data, full_feature_cols, load_data_predict
+from pytorch_tools import set_seed, save_model, clean_models, find_best_model_file, EarlyStopping, dump_data_info, load_data_info
+from stock_utils import stockids_training
 
 
 _device = "cuda:0"
@@ -23,39 +25,10 @@ _max_epoch = 80000
 _batch_size = 8192
 _model_name = 'dnn_model'
 _models_folder = 'models'
-_train_stockids = [
-    'sh600000',
-    'sh600004',
-    'sh600009',
-    'sh600010',
-    'sh600011',
-    'sh600015',
-    'sh600016',
-    'sh600018',
-    'sh600019',
-    'sh600025',
-    'sh600027',
-    'sh600028',
-    'sh600029',
-    'sh600030',
-    'sh600031',
-    'sh600036',
-    'sh600038',
-    'sh600048',
-    'sh600050',
-    'sh600061',
-    'sh600066',
-    'sh600068',
-    'sh600085',
-    'sh600089',
-    'sh600377',
-    'sh601021',
-    'sh601111',
-    'sh601333'
-]
 
 _input_feature_cols = ['p_open_s', 'p_close_s', 'p_high_s', 'p_low_s', 'p_volume_s']
 _output_feature_cols = ['n_high_s', 'n_low_s']
+_feature_info_cols = ['stockid']
 _output_size = len(_output_feature_cols)
 _input_size = len(_input_feature_cols)
 _encoder_hidden_size = 64
@@ -69,9 +42,10 @@ _stop_patience = 800
 
 # Dataset
 class StockDataset(Dataset):
-    def __init__(self, data: type(DataFrame), feautre_cols: List[str], label_cols: List[str], p_steps: int, n_steps: int):
-        feautre_cols = self._full_feature_cols(feautre_cols, p_steps)
-        label_cols = self._full_feature_cols(label_cols, n_steps)
+    def __init__(self, data: type(DataFrame), feautre_cols: List[str], label_cols: List[str], p_steps: int, n_steps: int, train: bool = True):
+        feautre_cols = full_feature_cols(feautre_cols, p_steps)
+        if train:
+            label_cols = full_feature_cols(label_cols, n_steps)
 
         self.x = data[feautre_cols].values
         self.y = data[label_cols].values
@@ -81,18 +55,9 @@ class StockDataset(Dataset):
 
     def __getitem__(self, index):
         return self.x[index], self.y[index]
-    
-    def _full_feature_cols(self, featue_cols: List[str], steps: int) -> List[str]:
-        result = []
-        for step in range(1, steps + 1):
-            for col in featue_cols:
-                result.append("{0}_{1}".format(col, step))
-
-        return result
 
 def data_to_tensor(inputs, device):
     return torch.tensor(inputs).float().to(device=device)
-
 
 
 # Model
@@ -147,21 +112,23 @@ def init_model():
     return TimeSeriesModel_NStep(_output_size, _input_size, _encoder_hidden_size, _decoder_hidden_size, _n_steps, _encoder_layers, _decoder_layers).to(device=_device)
 
 # Train
-def train(model, stock_ids):
+def train(model, stock_ids, model_name = _model_name):
     optimizer = torch.optim.Adam(model.parameters(), lr=_lr)
     criterion = torch.nn.MSELoss()
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=_lr_patience, verbose=True, cooldown=1, min_lr=_min_lr, eps=_min_lr)
-    earlyStop = EarlyStopping(_model_name, _models_folder, patience=_stop_patience)
-    clean_models(_model_name, _models_folder)
+    earlyStop = EarlyStopping(model_name, _models_folder, patience=_stop_patience)
+    
 
-    data = load_data(stock_ids, _p_steps)
+    data, features_info = load_data(stock_ids, _p_steps)
+    dump_data_info(model_name, _models_folder, features_info)
+
     train_dataset = StockDataset(data[data['day'] < '2018-01-01'], _input_feature_cols, _output_feature_cols, _p_steps, _n_steps)
     valid_dataset = StockDataset(data[data['day'] >= '2018-01-01'], _input_feature_cols, _output_feature_cols, _p_steps, _n_steps)
 
+    clean_models(model_name, _models_folder)
     pbar = tqdm(range(0, _max_epoch))
-
     
-    for epoch in pbar:
+    for _ in pbar:
         train_dataloader = DataLoader(train_dataset, batch_size=_batch_size, shuffle=True, num_workers=0)
         valid_dataloader = DataLoader(valid_dataset, batch_size=_batch_size, shuffle=True, num_workers=0)
         optimizer.zero_grad()
@@ -201,4 +168,50 @@ def train(model, stock_ids):
     
     return model
 
-train(init_model(), _train_stockids)
+def load_dnn_model(model_name = _model_name):
+    model = init_model()
+    best_model_parameters = find_best_model_file(model_name, _models_folder)
+    model.load_state_dict(torch.load(best_model_parameters))
+
+    return model
+
+def predict(stock_ids, model_name = _model_name):
+    data_info = load_data_info(_model_name, _models_folder)
+    data = load_data_predict(stock_ids, data_info, _p_steps)
+    feautre_cols = full_feature_cols(_input_feature_cols, _p_steps)
+
+    model = load_dnn_model()
+    with torch.no_grad():
+        model.eval()
+        x = data_to_tensor(data[feautre_cols].values, _device)
+        outputs = model(x, _p_steps).cpu()
+
+        for row in range(0, len(stock_ids)):
+            stats = data_info[stock_ids[row]]
+            outputs[row][0] = outputs[row][0] * stats['high_std'] + stats['high_mean']
+            outputs[row][2] = outputs[row][2] * stats['high_std'] + stats['high_mean']
+            outputs[row][1] = outputs[row][1] * stats['low_std'] + stats['low_mean']
+            outputs[row][3] = outputs[row][3] * stats['low_std'] + stats['low_mean']
+
+            print("{0}: {1}".format(stock_ids[row], outputs[row]))
+
+        return outputs
+        
+
+print(predict(stockids_training))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-stockids', nargs='+')
+    parser.add_argument('-train', dest='train_flag', action='store_true')
+    parser.set_defaults(train_flag=False)
+    
+    args = parser.parse_args()
+    stockids = stockids_training if not args.stockids else args.stockids
+
+    result = {}
+    model = init_model()
+    if args.train_flag:
+        train(model, stockids)
+
+    predict(stockids)
