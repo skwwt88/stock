@@ -1,6 +1,7 @@
 import requests
 import re
 import pandas as pd
+import datetime
 
 stockids_training = [
     'sh600000',
@@ -44,15 +45,20 @@ def stock_kline_day(id: str, enrich = None, max_count = 30000):
     return stock_df if not enrich else enrich(stock_df, id)
 
 def qfq(stock_df, id: str):
+    def minusDay(date):
+        dt = datetime.datetime.strptime(date, "%Y-%m-%d")
+        dt = dt + datetime.timedelta(days=-1)
+        return dt.strftime("%Y-%m-%d")
+
     qfq_uri = "https://finance.sina.com.cn/realstock/company/{0}/qfq.js".format(id)
     response = requests.get(qfq_uri)
     qfq_content = re.search(r'\[.*?\]', response.content.decode(encoding='utf-8')).group()
     qfq_df = pd.read_json(qfq_content)
-    
-    last_date = '2100-1-1'
-    for _, qfq_row in qfq_df.iterrows():
-        start_date = qfq_row['d']
-        f = qfq_row['f']
+
+    for index in range(1, len(qfq_df)):
+        last_date = minusDay(qfq_df.iloc[-index - 1]['d'])
+        start_date = qfq_df.iloc[-index]['d']
+        f = qfq_df.iloc[-index]['f']
 
         stock_df.loc[start_date:last_date, 'open'] = stock_df.loc[start_date:last_date, 'open'] / f
         stock_df.loc[start_date:last_date, 'high'] = stock_df.loc[start_date:last_date, 'high'] / f
@@ -60,9 +66,9 @@ def qfq(stock_df, id: str):
         stock_df.loc[start_date:last_date, 'close'] = stock_df.loc[start_date:last_date, 'close'] / f
         stock_df.loc[start_date:last_date, 'volume'] = stock_df.loc[start_date:last_date, 'volume'] * f
 
-        last_date = start_date
+        start_date = last_date
 
     return stock_df
 
 if __name__ == "__main__":
-    print(stock_kline_day('sh600029'))
+    print(stock_kline_day('sh600029', qfq))

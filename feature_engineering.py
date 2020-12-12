@@ -17,15 +17,20 @@ def full_feature_cols(featue_cols: List[str], steps: int) -> List[str]:
 def collect_stock_details(input: type(pd.DataFrame)) -> dict:
     result = {}
     for column in ['open', 'close', 'high', 'low']:
+        ratio_column_name = "{0}_ratio".format(column)
+        input[ratio_column_name] = input[column] / input['close'].shift(1)
+        input = input[input[ratio_column_name] < 1.11]
+        input = input[input[ratio_column_name] > 0.89]
+
+    for column in ['open', 'close', 'high', 'low']:
+        ratio_column_name = "{0}_ratio".format(column)
         std_column_name = "{0}_std".format(column)
         mean_column_name = "{0}_mean".format(column)
 
-        prices = input[column] / input['close'].shift(1)
-        prices = prices[prices < 1.11]
-        prices = prices[prices > 0.89]
-
-        result[mean_column_name] = prices.mean()
-        result[std_column_name] = prices.std()
+        std = input[ratio_column_name].std()
+        mean = input[ratio_column_name].mean()
+        result[mean_column_name] = mean
+        result[std_column_name] = std
 
     log_volumes = np.log(input['volume'] + 1)
     result['volume_mean'] = log_volumes.mean()
@@ -112,13 +117,14 @@ def _price_features_process(input: type(pd.DataFrame), stats: dict):
         input = input[input[ratio_column_name] > 0.89]
 
     for column in ['open', 'close', 'high', 'low']:
+        ratio_column_name = "{0}_ratio".format(column)
         std_column_name = "{0}_std".format(column)
         mean_column_name = "{0}_mean".format(column)
         standard_column_name = "{0}_s".format(column)
 
-        input[std_column_name] = stats[std_column_name]
-        input[mean_column_name] = stats[mean_column_name]
-        input[standard_column_name] = (input[ratio_column_name] - input[mean_column_name]) / input[std_column_name]
+        std = stats[std_column_name]
+        mean = stats[mean_column_name]
+        input[standard_column_name] = (input[ratio_column_name] - mean) / std
 
     return input
 

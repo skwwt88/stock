@@ -23,7 +23,7 @@ _lr = 0.001
 _min_lr = 0.0000001
 _max_epoch = 80000
 _batch_size = 8192
-_model_name = 'dnn_model'
+_model_name = 'rnn'
 _models_folder = 'models'
 
 _input_feature_cols = ['p_open_s', 'p_close_s', 'p_high_s', 'p_low_s', 'p_volume_s']
@@ -31,8 +31,8 @@ _output_feature_cols = ['n_high_s', 'n_low_s']
 _feature_info_cols = ['stockid']
 _output_size = len(_output_feature_cols)
 _input_size = len(_input_feature_cols)
-_encoder_hidden_size = 64
-_decoder_hidden_size = 32
+_encoder_hidden_size = 128
+_decoder_hidden_size = 64
 _encoder_layers = 3
 _decoder_layers = 3
 _p_steps = 44
@@ -198,8 +198,6 @@ def predict(stock_ids, model_name = _model_name):
         return outputs
         
 
-print(predict(stockids_training))
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-stockids', nargs='+')
@@ -212,6 +210,6 @@ if __name__ == "__main__":
     result = {}
     model = init_model()
     if args.train_flag:
-        train(model, stockids)
+       train(model, stockids)
 
     predict(stockids)
